@@ -25,8 +25,6 @@ Typical use::
     train_early = build_features(load_long("A", "calibration"), prefix_frac=0.3)
 """
 
-from __future__ import annotations
-
 from typing import Iterable, Optional
 
 import numpy as np
