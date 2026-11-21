@@ -100,16 +100,20 @@ def load_labels(process: Process) -> pd.Series:
 # --------------------------------------------------------------------------- #
 @dataclass
 class BatchDataset:
-    X: np.ndarray            # (n_batches, T, n_features), float32, padded with `pad_value`
+    X: np.ndarray            # (n_batches, T, n_features), float32, padded
     lengths: np.ndarray      # (n_batches,) true length of each series (after truncation)
     batch_ids: list[str]
     feature_names: list[str]
     y: Optional[np.ndarray] = None   # (n_batches,) int; None for the test split
+    align: Literal["start", "end"] = "start"   # where the real data sits in each row
 
     @property
     def mask(self) -> np.ndarray:
         """Boolean (n_batches, T): True where a timestep is real data."""
-        return np.arange(self.X.shape[1])[None, :] < self.lengths[:, None]
+        steps = np.arange(self.X.shape[1])[None, :]
+        if self.align == "end":
+            return steps >= self.X.shape[1] - self.lengths[:, None]
+        return steps < self.lengths[:, None]
 
     def __len__(self) -> int:
         return len(self.batch_ids)
@@ -118,7 +122,7 @@ class BatchDataset:
         idx = np.asarray(idx)
         return BatchDataset(self.X[idx], self.lengths[idx],
                             [self.batch_ids[i] for i in idx], self.feature_names,
-                            None if self.y is None else self.y[idx])
+                            None if self.y is None else self.y[idx], self.align)
 
     def to_torch(self):
         """Return a ``torch.utils.data.TensorDataset`` of (X, lengths[, y])."""
@@ -178,7 +182,7 @@ def load_dataset(
         if missing:
             raise ValueError(f"No label for batches: {sorted(missing)[:5]}...")
         y = labels.loc[ids].to_numpy(np.int64).copy()
-    return BatchDataset(X, lengths, ids, list(df.columns[2:]), y)
+    return BatchDataset(X, lengths, ids, list(df.columns[2:]), y, align)
 
 
 # --------------------------------------------------------------------------- #
@@ -190,7 +194,8 @@ class Standardizer:
     std: Optional[np.ndarray] = None
 
     def fit(self, ds: BatchDataset) -> "Standardizer":
-        real = ds.X[ds.mask]                     # (n_real_steps, n_features), ignores padding
+        # (n_real_steps, n_features), ignores padding; float64 avoids float32 accumulation error
+        real = ds.X[ds.mask].astype(np.float64)
         self.mean = real.mean(0)
         self.std = real.std(0)
         self.std[self.std < 1e-8] = 1.0          # constant channels stay constant
@@ -199,20 +204,8 @@ class Standardizer:
     def transform(self, ds: BatchDataset, pad_value: float = 0.0) -> BatchDataset:
         X = (ds.X - self.mean) / self.std
         X[~ds.mask] = pad_value
-        return BatchDataset(X.astype(np.float32), ds.lengths, ds.batch_ids, ds.feature_names, ds.y)
-
-
-# --------------------------------------------------------------------------- #
-# Tabular features (for quick sklearn / gradient-boosting baselines)
-# --------------------------------------------------------------------------- #
-def batch_summary(df: pd.DataFrame, stats=("mean", "std", "min", "max", "first", "last")) -> pd.DataFrame:
-    """One row per batch with per-feature summary stats plus ``n_timesteps``."""
-    feats = [c for c in df.columns if c not in ("batch_id", "t")]
-    g = df.sort_values(["batch_id", "t"]).groupby("batch_id", sort=True)
-    out = g[feats].agg(list(stats))
-    out.columns = [f"{f}_{s}" for f, s in out.columns]
-    out.insert(0, "n_timesteps", g.size())
-    return out
+        return BatchDataset(X.astype(np.float32), ds.lengths, ds.batch_ids, ds.feature_names,
+                            ds.y, ds.align)
 
 
 if __name__ == "__main__":
