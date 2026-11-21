@@ -19,8 +19,6 @@ Quick use::
     df = load_long("B", "test")                # long DataFrame: batch_id, t, <features>
 """
 
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass
 from pathlib import Path
