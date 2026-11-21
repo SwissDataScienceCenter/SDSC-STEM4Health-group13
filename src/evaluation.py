@@ -24,7 +24,8 @@ from sklearn.model_selection import KFold
 
 from models import recon_error, to_fixed_length, train_ae
 
-# Process A batches the brief describes as borderline rejects.
+# Process A batches the brief describes as borderline REJECTS. Note: calibration_labels.csv has
+# A_101 and A_103 as "accepted" (the notebook overrides them); A_102 is only in the test data.
 BORDERLINE = ["A_101", "A_102", "A_103", "A_104"]
 
 
