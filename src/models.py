@@ -72,6 +72,67 @@ class FastABOD(BaseEstimator):
         return np.array(out)  # higher = more normal
 
 
+class PCAMonitor(BaseEstimator):
+    """Multivariate statistical process control: Hotelling T² + Q (SPE) residual.
+
+    Restored from an earlier version of ``inspecting.ipynb``. Expects standardised input
+    (use inside ``make_pipeline(StandardScaler(), PCAMonitor())`` -- see ``pca_monitor``).
+    Both statistics are divided by their median on the training batches so they share
+    a scale; ``stat="combined"`` adds them.
+
+    ``contributions(X)`` splits the statistic exactly over the input columns, so a
+    batch's anomaly score can be attributed to individual features / sensors.
+    """
+
+    def __init__(self, n_components=10, stat="combined"):
+        self.n_components = n_components
+        self.stat = stat
+
+    def _parts(self, X):
+        X = np.asarray(X, dtype=np.float64)
+        Xc = X - self.pca_.mean_
+        T = Xc @ self.pca_.components_.T                      # scores (n, k)
+        E = Xc - T @ self.pca_.components_                     # residuals (n, p)
+        return Xc, T, E
+
+    def _raw(self, X):
+        _, T, E = self._parts(X)
+        return (T ** 2 / self.pca_.explained_variance_).sum(1), (E ** 2).sum(1)
+
+    def fit(self, X, y=None):
+        X = np.asarray(X, dtype=np.float64)
+        k = min(self.n_components, X.shape[0] - 1, X.shape[1])
+        self.pca_ = PCA(k).fit(X)
+        t2, q = self._raw(X)
+        self.t2_med_, self.q_med_ = np.median(t2), np.median(q)
+        return self
+
+    def _weights(self):
+        return {"T2": (1 / self.t2_med_, 0.0), "Q": (0.0, 1 / self.q_med_),
+                "combined": (1 / self.t2_med_, 1 / self.q_med_)}[self.stat]
+
+    def score_samples(self, X):
+        t2, q = self._raw(X)
+        w_t2, w_q = self._weights()
+        return -(w_t2 * t2 + w_q * q)                          # higher = more normal
+
+    def contributions(self, X) -> np.ndarray:
+        """(n, p) per-column contributions; each row sums to ``-score_samples``.
+
+        T² part: sum_a (t_a / lambda_a) * p_ja * x_j  (can be negative for a column)
+        Q part:  e_j ** 2                             (always >= 0)
+        """
+        Xc, T, E = self._parts(X)
+        c_t2 = ((T / self.pca_.explained_variance_) @ self.pca_.components_) * Xc
+        w_t2, w_q = self._weights()
+        return w_t2 * c_t2 + w_q * E ** 2
+
+
+def pca_monitor(n_components: int = 10, stat: str = "combined"):
+    """Scaled PCA T² + Q detector (not part of ``get_models`` to keep that table unchanged)."""
+    return make_pipeline(StandardScaler(), PCAMonitor(n_components, stat))
+
+
 # --------------------------------------------------------------------------- #
 # Model zoo
 # --------------------------------------------------------------------------- #
